@@ -29,7 +29,7 @@ ANTHROPIC_API_KEY=...
 | モデル選択 | 必須の環境変数 | 使用モデル |
 | --- | --- | --- |
 | GPT | `OPENAI_API_KEY` | `gpt-4.1-mini` |
-| Gemini | `GOOGLE_GENERATIVE_AI_API_KEY` | `gemini-2.5-flash` |
+| Gemini | `GOOGLE_GENERATIVE_AI_API_KEY` | `gemini-3.6-flash` |
 | Claude | `ANTHROPIC_API_KEY` | `claude-haiku-4-5` |
 
 キーが設定されていないモデルを選択した場合は、画面に設定すべき環境変数を明示したエラーが表示されます。

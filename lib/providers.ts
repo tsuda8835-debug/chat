@@ -29,7 +29,7 @@ export function getLanguageModel(id: ChatModelId): LanguageModel {
           "GOOGLE_GENERATIVE_AI_API_KEY",
         );
       }
-      return google("gemini-2.5-flash");
+      return google("gemini-3.6-flash");
     case "claude":
       if (!process.env.ANTHROPIC_API_KEY) {
         throw new ProviderConfigurationError("Claude", "ANTHROPIC_API_KEY");
