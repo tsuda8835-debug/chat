@@ -59,6 +59,7 @@ export default function ChatPage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [isSending, setIsSending] = useState(false);
+  const [thinkingStatus, setThinkingStatus] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -134,6 +135,62 @@ export default function ChatPage() {
     setError(null);
     setNotice(null);
     setIsSending(true);
+    setThinkingStatus("送信しています...");
+
+    const assistantId = crypto.randomUUID();
+    let assistantAdded = false;
+    let streamErrorMessage: string | null = null;
+
+    function ensureAssistantMessage() {
+      if (assistantAdded) {
+        return;
+      }
+      assistantAdded = true;
+      setMessages((currentMessages) => [
+        ...currentMessages,
+        { id: assistantId, role: "assistant", content: "" },
+      ]);
+    }
+
+    function applyStreamEvent(event: {
+      type: string;
+      message?: string;
+      citations?: Citation[];
+      text?: string;
+    }) {
+      switch (event.type) {
+        case "status":
+          setThinkingStatus(event.message ?? null);
+          break;
+        case "citations":
+          ensureAssistantMessage();
+          setMessages((currentMessages) =>
+            currentMessages.map((message) =>
+              message.id === assistantId
+                ? { ...message, citations: event.citations }
+                : message,
+            ),
+          );
+          break;
+        case "delta":
+          ensureAssistantMessage();
+          setThinkingStatus(null);
+          setMessages((currentMessages) =>
+            currentMessages.map((message) =>
+              message.id === assistantId
+                ? { ...message, content: message.content + (event.text ?? "") }
+                : message,
+            ),
+          );
+          break;
+        case "error":
+          streamErrorMessage =
+            event.message ?? "回答を生成できませんでした。";
+          break;
+        default:
+          break;
+      }
+    }
 
     try {
       const response = await fetch("/api/chat", {
@@ -145,21 +202,47 @@ export default function ChatPage() {
           messages: conversation.map(({ role, content }) => ({ role, content })),
         }),
       });
-      const data: { text?: string; citations?: Citation[]; error?: string } =
-        await response.json();
-      if (!response.ok) {
+
+      if (!response.ok || !response.body) {
+        const data: { error?: string } = await response
+          .json()
+          .catch(() => ({}));
         throw new Error(data.error ?? "回答を生成できませんでした。");
       }
-      setMessages((currentMessages) => [
-        ...currentMessages,
-        {
-          id: crypto.randomUUID(),
-          role: "assistant",
-          content: data.text ?? "",
-          citations: data.citations,
-        },
-      ]);
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) {
+          break;
+        }
+        buffer += decoder.decode(value, { stream: true });
+        let newlineIndex = buffer.indexOf("\n");
+        while (newlineIndex >= 0) {
+          const line = buffer.slice(0, newlineIndex).trim();
+          buffer = buffer.slice(newlineIndex + 1);
+          if (line) {
+            applyStreamEvent(JSON.parse(line));
+          }
+          newlineIndex = buffer.indexOf("\n");
+        }
+      }
+      if (buffer.trim()) {
+        applyStreamEvent(JSON.parse(buffer.trim()));
+      }
+
+      if (streamErrorMessage) {
+        throw new Error(streamErrorMessage);
+      }
     } catch (chatError) {
+      if (assistantAdded) {
+        setMessages((currentMessages) =>
+          currentMessages.filter((message) => message.id !== assistantId),
+        );
+      }
       setError(
         chatError instanceof Error
           ? chatError.message
@@ -167,6 +250,7 @@ export default function ChatPage() {
       );
     } finally {
       setIsSending(false);
+      setThinkingStatus(null);
     }
   }
 
@@ -338,29 +422,46 @@ export default function ChatPage() {
                             : "pt-1"
                         }`}
                       >
-                        <p className="whitespace-pre-wrap text-sm leading-7">
-                          {message.content}
-                        </p>
+                        {message.content && (
+                          <p className="whitespace-pre-wrap text-sm leading-7">
+                            {message.content}
+                          </p>
+                        )}
                         {message.citations && message.citations.length > 0 && (
-                          <div className="mt-4 border-t border-black/10 pt-3">
+                          <div className="mt-4 border-t border-zinc-200 pt-3">
                             <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-black/40">
                               Sources
                             </p>
                             <div className="space-y-2">
-                              {message.citations.map((citation, index) => (
-                                <details
-                                  className="rounded-lg border border-black/10 bg-white px-3 py-2 text-xs"
-                                  key={`${citation.source}-${index}`}
-                                >
-                                  <summary className="cursor-pointer list-none font-medium">
-                                    <span className="mr-2 text-black/40">[{index + 1}]</span>
-                                    {citation.source}
-                                  </summary>
-                                  <p className="mt-2 leading-5 text-black/55">
-                                    {citation.excerpt}
-                                  </p>
-                                </details>
-                              ))}
+                              {message.citations.map((citation, index) => {
+                                const isKnowledgeFile =
+                                  citation.source === "knowledge.txt";
+                                return (
+                                  <details
+                                    className="rounded-lg border border-zinc-200 bg-zinc-100 px-3 py-2 text-xs"
+                                    key={`${citation.source}-${index}`}
+                                  >
+                                    <summary className="flex cursor-pointer list-none flex-wrap items-center gap-2">
+                                      <span className="text-black/40">
+                                        [{index + 1}]
+                                      </span>
+                                      <span className="inline-flex items-center gap-1 rounded-full border border-zinc-200 bg-white px-2 py-0.5 text-[10px] font-medium text-black/60">
+                                        {isKnowledgeFile
+                                          ? "📄 knowledge.txt"
+                                          : "📁 Uploaded PDF"}
+                                      </span>
+                                      {!isKnowledgeFile && (
+                                        <span className="font-medium text-black/70">
+                                          {citation.source}
+                                        </span>
+                                      )}
+                                    </summary>
+                                    <p className="mt-2 leading-5 text-black/55">
+                                      {citation.excerpt}
+                                    </p>
+                                  </details>
+                                );
+                              })}
                             </div>
                           </div>
                         )}
@@ -368,9 +469,15 @@ export default function ChatPage() {
                     </article>
                   ))}
                   {isSending && (
-                    <div className="flex items-center gap-2 text-xs text-black/45">
-                      <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-black" />
-                      考えています…
+                    <div className="flex items-center gap-2 rounded-lg border border-zinc-200 bg-zinc-100 px-3 py-2 text-xs text-black/50">
+                      <span className="flex items-center gap-1">
+                        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-black/60 [animation-delay:-0.3s]" />
+                        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-black/60 [animation-delay:-0.15s]" />
+                        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-black/60" />
+                      </span>
+                      <span className="animate-fade-in" key={thinkingStatus ?? "default"}>
+                        {thinkingStatus ?? "考えています…"}
+                      </span>
                     </div>
                   )}
                 </div>
