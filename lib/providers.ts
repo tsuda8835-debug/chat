@@ -6,6 +6,16 @@ import type { LanguageModel } from "ai";
 export const modelIds = ["gpt", "gemini", "claude"] as const;
 export type ChatModelId = (typeof modelIds)[number];
 
+const modelLabels: Record<ChatModelId, string> = {
+  gpt: "GPT",
+  gemini: "Gemini",
+  claude: "Claude",
+};
+
+export function getModelLabel(id: ChatModelId): string {
+  return modelLabels[id];
+}
+
 export class ProviderConfigurationError extends Error {
   constructor(provider: string, variable: string) {
     super(
