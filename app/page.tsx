@@ -8,6 +8,9 @@ import {
   useRef,
   useState,
 } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkBreaks from "remark-breaks";
+import remarkGfm from "remark-gfm";
 
 type ModelId = "gpt" | "gemini" | "claude";
 
@@ -66,6 +69,58 @@ function SendIcon() {
     >
       <path d="M5 12h13M13 6l6 6-6 6" />
     </svg>
+  );
+}
+
+function MarkdownMessage({ content }: { content: string }) {
+  return (
+    <div className="markdown-message text-sm leading-7">
+      <ReactMarkdown
+        components={{
+          a: ({ href, children, ...props }) => {
+            const isExternal = href?.startsWith("http://") || href?.startsWith("https://");
+            return (
+              <a
+                {...props}
+                href={href}
+                rel={isExternal ? "noreferrer" : undefined}
+                target={isExternal ? "_blank" : undefined}
+              >
+                {children}
+              </a>
+            );
+          },
+          code: ({ className, children, ...props }) => {
+            const isInline = !className && !String(children).includes("\n");
+            if (isInline) {
+              return (
+                <code {...props} className="rounded bg-black/8 px-1.5 py-0.5 text-[0.9em]">
+                  {children}
+                </code>
+              );
+            }
+            return (
+              <code {...props} className={className}>
+                {children}
+              </code>
+            );
+          },
+          pre: ({ children }) => (
+            <pre className="my-4 max-w-full overflow-x-auto rounded-xl bg-[#202020] p-4 text-[13px] leading-6 text-white/90">
+              {children}
+            </pre>
+          ),
+          table: ({ children }) => (
+            <div className="my-4 max-w-full overflow-x-auto">
+              <table>{children}</table>
+            </div>
+          ),
+        }}
+        remarkPlugins={[remarkGfm, remarkBreaks]}
+      >
+        {content}
+      </ReactMarkdown>
+    </div>
   );
 }
 
@@ -362,10 +417,10 @@ export default function ChatPage() {
         <header className="flex flex-col gap-5 border-b border-black/10 px-6 py-5 sm:flex-row sm:items-center sm:justify-between sm:px-8">
           <div className="flex items-center gap-3">
             <div className="grid h-9 w-9 place-items-center rounded-xl bg-[#171717] text-sm font-semibold text-white">
-              C
+              H
             </div>
             <div>
-              <h1 className="text-sm font-semibold tracking-tight">Context</h1>
+              <h1 className="text-sm font-semibold tracking-tight">Hanashi</h1>
               <p className="text-xs text-black/45">Local RAG workspace</p>
             </div>
           </div>
@@ -523,7 +578,7 @@ export default function ChatPage() {
                     >
                       {message.role === "assistant" && (
                         <div className="mt-1 grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-black text-[10px] font-semibold text-white">
-                          C
+                          H
                         </div>
                       )}
                       <div
@@ -534,9 +589,13 @@ export default function ChatPage() {
                         }`}
                       >
                         {message.content && (
-                          <p className="whitespace-pre-wrap text-sm leading-7">
-                            {message.content}
-                          </p>
+                          message.role === "assistant" ? (
+                            <MarkdownMessage content={message.content} />
+                          ) : (
+                            <p className="whitespace-pre-wrap text-sm leading-7">
+                              {message.content}
+                            </p>
+                          )
                         )}
                         {message.citations && message.citations.length > 0 && (
                           <div className="mt-4 border-t border-zinc-200 pt-3">
