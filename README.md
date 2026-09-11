@@ -1,4 +1,4 @@
-# Context — ローカル RAG AI チャット
+# Hanashi — ローカル RAG AI チャット
 
 Next.js App Router、TypeScript、Tailwind CSS で作成した、ミニマルな AI チャットです。GPT、Gemini、Claude を切り替え、プロジェクト内のナレッジとアップロードした PDF / TXT / Markdown を使う RAG（検索拡張生成）を利用できます。会話履歴はローカル SQLite に保存されます。
 
