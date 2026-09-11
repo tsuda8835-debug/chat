@@ -131,7 +131,7 @@ export async function ensureKnowledgeInitialized(): Promise<void> {
   return knowledgeInitialization;
 }
 
-export async function addPdfDocument(
+export async function addDocument(
   filename: string,
   text: string,
 ): Promise<number> {
