@@ -91,7 +91,7 @@ export async function POST(request: Request) {
           if (citations.some((citation) => citation.source !== "knowledge.txt")) {
             send({
               type: "status",
-              message: "アップロード済み PDF のコンテキストを解析中...",
+              message: "アップロード済み文書のコンテキストを解析中...",
             });
             await wait(300);
           }

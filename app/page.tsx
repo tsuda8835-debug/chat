@@ -1,6 +1,13 @@
 "use client";
 
-import { ChangeEvent, FormEvent, KeyboardEvent, useRef, useState } from "react";
+import {
+  ChangeEvent,
+  FormEvent,
+  KeyboardEvent,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 
 type ModelId = "gpt" | "gemini" | "claude";
 
@@ -15,6 +22,15 @@ type Message = {
   role: "user" | "assistant";
   content: string;
   citations?: Citation[];
+};
+
+type ConversationSummary = {
+  id: string;
+  title: string;
+  model: ModelId;
+  ragEnabled: boolean;
+  createdAt: string;
+  updatedAt: string;
 };
 
 const models: Array<{ id: ModelId; label: string; detail: string }> = [
@@ -64,17 +80,86 @@ export default function ChatPage() {
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [uploadedFiles, setUploadedFiles] = useState<string[]>([]);
+  const [conversations, setConversations] = useState<ConversationSummary[]>([]);
+  const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  async function uploadPdf(file: File) {
+  useEffect(() => {
+    void loadConversations();
+  }, []);
+
+  async function loadConversations() {
+    try {
+      const response = await fetch("/api/conversations");
+      const data: { conversations?: ConversationSummary[]; error?: string } = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error ?? "履歴を読み込めませんでした。");
+      }
+      setConversations(data.conversations ?? []);
+    } catch (historyError) {
+      setError(historyError instanceof Error ? historyError.message : "履歴を読み込めませんでした。");
+    }
+  }
+
+  async function createNewConversation() {
+    const response = await fetch("/api/conversations", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: "新しい会話", model, ragEnabled }),
+    });
+    const data: { conversation?: ConversationSummary; error?: string } = await response.json();
+    if (!response.ok || !data.conversation) {
+      throw new Error(data.error ?? "会話を作成できませんでした。");
+    }
+    setConversations((current) => [data.conversation!, ...current]);
+    setActiveConversationId(data.conversation.id);
+    setMessages([]);
+    return data.conversation.id;
+  }
+
+  async function selectConversation(id: string) {
+    if (isSending || id === activeConversationId) return;
+    try {
+      const response = await fetch(`/api/conversations/${id}`);
+      const data: { conversation?: ConversationSummary & { messages: Message[] }; error?: string } = await response.json();
+      if (!response.ok || !data.conversation) throw new Error(data.error ?? "会話を読み込めませんでした。");
+      setActiveConversationId(id);
+      setMessages(data.conversation.messages);
+      setModel(data.conversation.model);
+      setRagEnabled(data.conversation.ragEnabled);
+      setError(null);
+    } catch (historyError) {
+      setError(historyError instanceof Error ? historyError.message : "会話を読み込めませんでした。");
+    }
+  }
+
+  async function removeConversation(id: string) {
+    if (isSending) return;
+    try {
+      const response = await fetch(`/api/conversations/${id}`, { method: "DELETE" });
+      if (!response.ok) throw new Error("会話を削除できませんでした。");
+      setConversations((current) => current.filter((conversation) => conversation.id !== id));
+      if (activeConversationId === id) {
+        setActiveConversationId(null);
+        setMessages([]);
+      }
+    } catch (historyError) {
+      setError(historyError instanceof Error ? historyError.message : "会話を削除できませんでした。");
+    }
+  }
+
+  async function uploadDocument(file: File) {
     setError(null);
     setNotice(null);
-    if (file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) {
-      setError("PDF 形式のファイルを選択してください。");
+    const filename = file.name.toLowerCase();
+    const isPdf = file.type === "application/pdf" || filename.endsWith(".pdf");
+    const isText = file.type === "text/plain" || file.type === "text/markdown" || filename.endsWith(".txt") || filename.endsWith(".md");
+    if (!isPdf && !isText) {
+      setError("PDF、TXT、または Markdown ファイルを選択してください。");
       return;
     }
-    if (file.size > 10 * 1024 * 1024) {
-      setError("PDF のサイズは 10 MB 以下にしてください。");
+    if (file.size === 0 || file.size > 10 * 1024 * 1024) {
+      setError(`${isPdf ? "PDF" : "テキストファイル"} のサイズは 1 バイト以上 10 MB 以下にしてください。`);
       return;
     }
 
@@ -89,18 +174,18 @@ export default function ChatPage() {
       const data: { filename?: string; message?: string; error?: string } =
         await response.json();
       if (!response.ok) {
-        throw new Error(data.error ?? "PDF をアップロードできませんでした。");
+        throw new Error(data.error ?? "ファイルをアップロードできませんでした。");
       }
       setUploadedFiles((files) => [
         ...files,
         data.filename ?? file.name,
       ]);
-      setNotice(data.message ?? "PDF を検索対象へ追加しました。");
+      setNotice(data.message ?? "ファイルを検索対象へ追加しました。");
     } catch (uploadError) {
       setError(
         uploadError instanceof Error
           ? uploadError.message
-          : "PDF をアップロードできませんでした。",
+          : "ファイルをアップロードできませんでした。",
       );
     } finally {
       setIsUploading(false);
@@ -113,7 +198,7 @@ export default function ChatPage() {
   function onFileChange(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     if (file) {
-      void uploadPdf(file);
+      void uploadDocument(file);
     }
   }
 
@@ -124,13 +209,22 @@ export default function ChatPage() {
       return;
     }
 
+    let conversationId = activeConversationId;
+    try {
+      if (!conversationId) {
+        conversationId = await createNewConversation();
+      }
+    } catch (creationError) {
+      setError(creationError instanceof Error ? creationError.message : "会話を作成できませんでした。");
+      return;
+    }
+
     const nextMessage: Message = {
       id: crypto.randomUUID(),
       role: "user",
       content: text,
     };
-    const conversation = [...messages, nextMessage];
-    setMessages(conversation);
+    setMessages((current) => [...current, nextMessage]);
     setInput("");
     setError(null);
     setNotice(null);
@@ -193,13 +287,13 @@ export default function ChatPage() {
     }
 
     try {
-      const response = await fetch("/api/chat", {
+      const response = await fetch(`/api/conversations/${conversationId}/messages`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           model,
           ragEnabled,
-          messages: conversation.map(({ role, content }) => ({ role, content })),
+          content: text,
         }),
       });
 
@@ -251,6 +345,7 @@ export default function ChatPage() {
     } finally {
       setIsSending(false);
       setThinkingStatus(null);
+      void loadConversations();
     }
   }
 
@@ -317,8 +412,24 @@ export default function ChatPage() {
           </div>
         </header>
 
-        <div className="grid min-h-0 flex-1 lg:grid-cols-[248px_minmax(0,1fr)]">
-          <aside className="border-b border-black/10 bg-[#f8f8f6] p-5 lg:border-b-0 lg:border-r">
+        <div className="grid min-h-0 flex-1 lg:grid-cols-[280px_minmax(0,1fr)]">
+          <aside className="thin-scrollbar max-h-[48vh] overflow-y-auto border-b border-black/10 bg-[#f8f8f6] p-5 lg:max-h-none lg:border-b-0 lg:border-r">
+            <div className="mb-6">
+              <div className="mb-3 flex items-center justify-between">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-black/40">履歴</p>
+                <button className="rounded-md px-2 py-1 text-[11px] font-semibold text-black/60 hover:bg-black/5 hover:text-black" disabled={isSending} onClick={() => void createNewConversation().catch((creationError: unknown) => setError(creationError instanceof Error ? creationError.message : "会話を作成できませんでした。"))} type="button">新規作成</button>
+              </div>
+              <div className="space-y-1">
+                {conversations.length === 0 ? (
+                  <p className="px-2 text-[11px] leading-5 text-black/40">保存済みの会話はありません。</p>
+                ) : conversations.map((conversation) => (
+                  <div className={`group flex items-center rounded-lg ${activeConversationId === conversation.id ? "bg-black text-white" : "hover:bg-black/5"}`} key={conversation.id}>
+                    <button className="min-w-0 flex-1 truncate px-2 py-2 text-left text-xs" onClick={() => void selectConversation(conversation.id)} type="button">{conversation.title}</button>
+                    <button aria-label={`${conversation.title}を削除`} className="mr-1 rounded px-1.5 py-1 text-xs opacity-50 hover:bg-white/15 hover:opacity-100" onClick={() => void removeConversation(conversation.id)} type="button">×</button>
+                  </div>
+                ))}
+              </div>
+            </div>
             <p className="mb-3 text-[11px] font-semibold uppercase tracking-[0.16em] text-black/40">
               Knowledge
             </p>
@@ -332,14 +443,14 @@ export default function ChatPage() {
                 <UploadIcon />
               </span>
               <span className="text-xs font-semibold">
-                {isUploading ? "処理しています…" : "PDF を追加"}
+                {isUploading ? "処理しています…" : "文書を追加"}
               </span>
               <span className="mt-1 text-[11px] leading-relaxed text-black/45">
-                最大 10 MB · テキスト PDF
+                最大 10 MB · PDF / TXT / Markdown
               </span>
             </button>
             <input
-              accept="application/pdf,.pdf"
+              accept="application/pdf,.pdf,text/plain,.txt,text/markdown,.md"
               className="sr-only"
               onChange={onFileChange}
               ref={fileInputRef}
@@ -361,12 +472,12 @@ export default function ChatPage() {
                     key={`${filename}-${index}`}
                   >
                     <p className="truncate font-medium">{filename}</p>
-                    <p className="mt-0.5 text-[10px] text-black/40">PDF · メモリ内</p>
+                    <p className="mt-0.5 text-[10px] text-black/40">アップロード済み · メモリ内</p>
                   </div>
                 ))}
               </div>
               <p className="mt-3 text-[10px] leading-relaxed text-black/40">
-                PDF はこのサーバープロセスの全利用者で共有され、再起動時に消去されます。
+                アップロード文書はこのプロセス内で共有され、再起動時に消去されます。
               </p>
             </div>
           </aside>
@@ -383,7 +494,7 @@ export default function ChatPage() {
                   </h2>
                   <p className="mt-4 max-w-md text-sm leading-7 text-black/55">
                     {ragEnabled
-                      ? "knowledge.txt と追加した PDF を検索し、関連する根拠とともに回答します。"
+                      ? "knowledge.txt と追加した文書を検索し、関連する根拠とともに回答します。"
                       : "選択したモデルとの通常の会話モードです。ローカル文書は参照しません。"}
                   </p>
                   <div className="mt-7 flex flex-wrap gap-2">
@@ -448,7 +559,7 @@ export default function ChatPage() {
                                       <span className="inline-flex items-center gap-1 rounded-full border border-zinc-200 bg-white px-2 py-0.5 text-[10px] font-medium text-black/60">
                                         {isKnowledgeFile
                                           ? "📄 knowledge.txt"
-                                          : "📁 Uploaded PDF"}
+                                          : "📁 Uploaded document"}
                                       </span>
                                       {!isKnowledgeFile && (
                                         <span className="font-medium text-black/70">
